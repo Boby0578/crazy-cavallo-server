@@ -5,24 +5,16 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import re
-import urllib.parse
 
 app = Flask(__name__)
 CORS(app)
 
 # ---------- CONFIGURATION ----------
-# Endpoints PMU à essayer
+# Endpoint PMU qui FONCTIONNE (testé) + variantes de secours
 PMU_API_ENDPOINTS = [
     "https://online.turfinfo.api.pmu.fr/rest/client/61/programme/",
     "https://online.turfinfo.api.pmu.fr/rest/client/1/programme/",
     "https://offline.turfinfo.api.pmu.fr/rest/client/7/programme/",
-]
-
-# Proxys publics pour contourner les blocages d'IP (Render = cloud bloqué par PMU)
-PUBLIC_PROXIES = [
-    "https://api.allorigins.win/raw?url=",
-    "https://corsproxy.io/?",
-    "https://api.codetabs.com/v1/proxy?quest=",
 ]
 
 HEADERS = {
@@ -31,41 +23,12 @@ HEADERS = {
     'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
     'Referer': 'https://www.pmu.fr/',
     'Origin': 'https://www.pmu.fr',
-    'X-Requested-With': 'XMLHttpRequest',
 }
 
 def today_pmu(offset_days=0):
-    """Retourne une date au format YYYYMMDD, avec décalage optionnel."""
+    """Retourne une date au format DDMMYYYY (celui utilisé par l'API PMU)."""
     date = datetime.now() + timedelta(days=offset_days)
-    return date.strftime("%Y%m%d")
-
-def try_fetch(url):
-    """Essaie de récupérer une URL : direct, puis via proxys publics."""
-    # Tentative directe
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            try:
-                return r.json()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Tentative via proxys publics
-    for proxy in PUBLIC_PROXIES:
-        try:
-            proxy_url = proxy + urllib.parse.quote(url, safe='')
-            r = requests.get(proxy_url, timeout=15)
-            if r.status_code == 200:
-                try:
-                    return r.json()
-                except Exception:
-                    pass
-        except Exception:
-            continue
-
-    return None
+    return date.strftime("%d%m%Y")
 
 # ---------- PAGE D'ACCUEIL ----------
 @app.route('/')
@@ -83,51 +46,28 @@ def home():
         ]
     })
 
-# ---------- TEST DE CONNEXION PMU ----------
-@app.route('/api/test')
-def test_pmu():
-    """Endpoint de diagnostic : teste la connexion au PMU."""
-    results = []
-    for endpoint in PMU_API_ENDPOINTS:
-        url = f"{endpoint}{today_pmu(0)}"
-        # Test direct
-        direct_status = "?"
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=8)
-            direct_status = str(r.status_code)
-        except Exception as e:
-            direct_status = f"ERR: {str(e)[:50]}"
-
-        # Test via proxy
-        proxy_status = "?"
-        try:
-            proxy_url = PUBLIC_PROXIES[0] + urllib.parse.quote(url, safe='')
-            r = requests.get(proxy_url, timeout=12)
-            proxy_status = str(r.status_code)
-        except Exception as e:
-            proxy_status = f"ERR: {str(e)[:50]}"
-
-        results.append({
-            "endpoint": endpoint,
-            "direct": direct_status,
-            "via_proxy": proxy_status
-        })
-    return jsonify({"tests": results})
-
 # ---------- 1. PROGRAMME DU JOUR ----------
 @app.route('/api/programme')
 def get_programme():
-    """Récupère le programme du jour avec plusieurs tentatives."""
+    """Récupère le programme du jour avec fallback sur plusieurs endpoints et dates."""
     for endpoint in PMU_API_ENDPOINTS:
         for offset in [0, 1, -1, 2, -2]:
             url = f"{endpoint}{today_pmu(offset)}"
-            data = try_fetch(url)
-            if data and 'reunions' in data and len(data.get('reunions', [])) > 0:
-                return jsonify(data)
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data and 'programme' in data:
+                        prog = data['programme']
+                        if 'reunions' in prog and len(prog['reunions']) > 0:
+                            return jsonify(prog)
+                    elif data and 'reunions' in data and len(data['reunions']) > 0:
+                        return jsonify(data)
+            except Exception:
+                continue
     return jsonify({
         "error": "Impossible de récupérer le programme du jour",
-        "details": "Toutes les tentatives (directes + proxys) ont échoué",
-        "conseil": "Essaie /api/test pour diagnostiquer"
+        "details": "Toutes les tentatives ont échoué"
     }), 500
 
 # ---------- 2. PARTICIPANTS + COTES ----------
@@ -139,9 +79,14 @@ def get_participants():
     for endpoint in PMU_API_ENDPOINTS:
         for offset in [0, 1, -1, 2, -2]:
             url = f"{endpoint}{today_pmu(offset)}/R{reunion}/C{course}/participants"
-            data = try_fetch(url)
-            if data and 'participants' in data and len(data.get('participants', [])) > 0:
-                return jsonify(data)
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data and 'participants' in data and len(data['participants']) > 0:
+                        return jsonify(data)
+            except Exception:
+                continue
     return jsonify({"error": "Participants indisponibles"}), 500
 
 # ---------- 3. PRONOSTICS EQUIDIA ----------
