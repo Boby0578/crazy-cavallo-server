@@ -3,23 +3,30 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 app = Flask(__name__)
 CORS(app)
 
 # ---------- CONFIGURATION ----------
-PMU_API_BASE = "https://offline.turfinfo.api.pmu.fr/rest/client/7/programme/"
+# Plusieurs endpoints PMU en fallback (le PMU change régulièrement)
+PMU_API_ENDPOINTS = [
+    "https://online.turfinfo.api.pmu.fr/rest/client/61/programme/",
+    "https://online.turfinfo.api.pmu.fr/rest/client/1/programme/",
+    "https://offline.turfinfo.api.pmu.fr/rest/client/7/programme/",
+]
+
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/html, */*',
     'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8'
 }
 
-def today_pmu():
-    """Retourne la date du jour au format YYYYMMDD pour l'API PMU."""
-    return datetime.now().strftime("%Y%m%d")
+def today_pmu(offset_days=0):
+    """Retourne une date au format YYYYMMDD, avec décalage optionnel."""
+    date = datetime.now() + timedelta(days=offset_days)
+    return date.strftime("%Y%m%d")
 
 # ---------- PAGE D'ACCUEIL ----------
 @app.route('/')
@@ -40,28 +47,41 @@ def home():
 # ---------- 1. PROGRAMME DU JOUR ----------
 @app.route('/api/programme')
 def get_programme():
-    """Récupère le programme complet du jour depuis l'API PMU."""
-    url = f"{PMU_API_BASE}{today_pmu()}"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Récupère le programme du jour avec plusieurs tentatives."""
+    for endpoint in PMU_API_ENDPOINTS:
+        for offset in [0, 1, -1, 2, -2]:
+            url = f"{endpoint}{today_pmu(offset)}"
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data and 'reunions' in data and len(data['reunions']) > 0:
+                        return jsonify(data)
+            except Exception:
+                continue
+    return jsonify({
+        "error": "Impossible de récupérer le programme du jour",
+        "details": "Toutes les tentatives ont échoué"
+    }), 500
 
 # ---------- 2. PARTICIPANTS + COTES ----------
 @app.route('/api/participants')
 def get_participants():
-    """Récupère les participants et cotes d'une course spécifique."""
+    """Récupère les participants avec plusieurs tentatives."""
     reunion = request.args.get('reunion', '1')
     course = request.args.get('course', '1')
-    url = f"{PMU_API_BASE}{today_pmu()}/R{reunion}/C{course}/participants"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    for endpoint in PMU_API_ENDPOINTS:
+        for offset in [0, 1, -1, 2, -2]:
+            url = f"{endpoint}{today_pmu(offset)}/R{reunion}/C{course}/participants"
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data and 'participants' in data and len(data['participants']) > 0:
+                        return jsonify(data)
+            except Exception:
+                continue
+    return jsonify({"error": "Participants indisponibles"}), 500
 
 # ---------- 3. PRONOSTICS EQUIDIA ----------
 @app.route('/api/pronostics/equidia')
