@@ -10,7 +10,6 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------- CONFIGURATION ----------
-# Endpoint PMU qui FONCTIONNE (testé) + variantes de secours
 PMU_API_ENDPOINTS = [
     "https://online.turfinfo.api.pmu.fr/rest/client/61/programme/",
     "https://online.turfinfo.api.pmu.fr/rest/client/1/programme/",
@@ -26,9 +25,35 @@ HEADERS = {
 }
 
 def today_pmu(offset_days=0):
-    """Retourne une date au format DDMMYYYY (celui utilisé par l'API PMU)."""
     date = datetime.now() + timedelta(days=offset_days)
     return date.strftime("%d%m%Y")
+
+def try_fetch_json(url):
+    """Essaie de récupérer une URL JSON (direct uniquement, l'API PMU accepte)."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"Erreur fetch {url}: {e}")
+    return None
+
+def fetch_with_fallback(path_suffix, reunion, course=None):
+    """
+    Essaie plusieurs combinaisons endpoint + date.
+    path_suffix : ex: 'participants', 'analyse', 'pronostics', 'combinaisons'
+    """
+    for endpoint in PMU_API_ENDPOINTS:
+        for offset in [0, 1, -1, 2, -2]:
+            date = today_pmu(offset)
+            if course:
+                url = f"{endpoint}{date}/R{reunion}/C{course}/{path_suffix}"
+            else:
+                url = f"{endpoint}{date}/R{reunion}/{path_suffix}"
+            data = try_fetch_json(url)
+            if data:
+                return data
+    return None
 
 # ---------- PAGE D'ACCUEIL ----------
 @app.route('/')
@@ -39,57 +64,71 @@ def home():
         "endpoints": [
             "/api/programme",
             "/api/participants?reunion=1&course=1",
-            "/api/pronostics/equidia",
-            "/api/pronostics/geny",
-            "/api/pronostics/turfbzh",
-            "/api/pronostics/paristurf"
+            "/api/analyse?reunion=1&course=1",
+            "/api/pronostics-pmu?reunion=1&course=1",
+            "/api/combinaisons?reunion=1&course=1"
         ]
     })
 
-# ---------- 1. PROGRAMME DU JOUR ----------
+# ---------- 1. PROGRAMME ----------
 @app.route('/api/programme')
 def get_programme():
-    """Récupère le programme du jour avec fallback sur plusieurs endpoints et dates."""
     for endpoint in PMU_API_ENDPOINTS:
         for offset in [0, 1, -1, 2, -2]:
             url = f"{endpoint}{today_pmu(offset)}"
-            try:
-                r = requests.get(url, headers=HEADERS, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()
-                    if data and 'programme' in data:
-                        prog = data['programme']
-                        if 'reunions' in prog and len(prog['reunions']) > 0:
-                            return jsonify(prog)
-                    elif data and 'reunions' in data and len(data['reunions']) > 0:
-                        return jsonify(data)
-            except Exception:
-                continue
-    return jsonify({
-        "error": "Impossible de récupérer le programme du jour",
-        "details": "Toutes les tentatives ont échoué"
-    }), 500
+            data = try_fetch_json(url)
+            if data and 'programme' in data:
+                prog = data['programme']
+                if 'reunions' in prog and len(prog['reunions']) > 0:
+                    return jsonify(prog)
+            elif data and 'reunions' in data and len(data['reunions']) > 0:
+                return jsonify(data)
+    return jsonify({"error": "Programme indisponible"}), 500
 
-# ---------- 2. PARTICIPANTS + COTES ----------
+# ---------- 2. PARTICIPANTS ----------
 @app.route('/api/participants')
 def get_participants():
-    """Récupère les participants avec plusieurs tentatives."""
     reunion = request.args.get('reunion', '1')
     course = request.args.get('course', '1')
-    for endpoint in PMU_API_ENDPOINTS:
-        for offset in [0, 1, -1, 2, -2]:
-            url = f"{endpoint}{today_pmu(offset)}/R{reunion}/C{course}/participants"
-            try:
-                r = requests.get(url, headers=HEADERS, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()
-                    if data and 'participants' in data and len(data['participants']) > 0:
-                        return jsonify(data)
-            except Exception:
-                continue
+    data = fetch_with_fallback('participants', reunion, course)
+    if data and 'participants' in data:
+        return jsonify(data)
     return jsonify({"error": "Participants indisponibles"}), 500
 
-# ---------- 3. PRONOSTICS EQUIDIA ----------
+# ---------- 3. ANALYSE (commentaires + favoris) ----------
+@app.route('/api/analyse')
+def get_analyse():
+    """Analyse presse PMU : commentaires + rangs + cotes probables."""
+    reunion = request.args.get('reunion', '1')
+    course = request.args.get('course', '1')
+    data = fetch_with_fallback('analyse', reunion, course)
+    if data and 'selection' in data:
+        return jsonify(data)
+    return jsonify({"error": "Analyse indisponible", "selection": []}), 200
+
+# ---------- 4. PRONOSTICS PRESSE ----------
+@app.route('/api/pronostics-pmu')
+def get_pronostics_pmu():
+    """Pronostics presse PMU avec sélections ordonnées."""
+    reunion = request.args.get('reunion', '1')
+    course = request.args.get('course', '1')
+    data = fetch_with_fallback('pronostics', reunion, course)
+    if data and 'selection' in data:
+        return jsonify(data)
+    return jsonify({"error": "Pronostics indisponibles", "selection": []}), 200
+
+# ---------- 5. COMBINAISONS (masses d'enjeux réelles) ----------
+@app.route('/api/combinaisons')
+def get_combinaisons():
+    """Masses d'enjeux par pari (Simple, Couplé, Trio, etc.)."""
+    reunion = request.args.get('reunion', '1')
+    course = request.args.get('course', '1')
+    data = fetch_with_fallback('combinaisons', reunion, course)
+    if data and 'combinaisons' in data:
+        return jsonify(data)
+    return jsonify({"error": "Combinaisons indisponibles", "combinaisons": []}), 200
+
+# ---------- 6. PRONOSTICS EQUIDIA (optionnel, peut échouer) ----------
 @app.route('/api/pronostics/equidia')
 def get_pronos_equidia():
     try:
@@ -98,84 +137,21 @@ def get_pronos_equidia():
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
         pronostics = []
-        for bloc in soup.select('.pronostic-item, .expert-pick, article'):
+        for bloc in soup.select('article'):
             try:
-                nom = bloc.select_one('.expert-name, .author, strong')
                 selection = bloc.select_one('.selection, .picks, .nums')
                 course_titre = bloc.select_one('.race-title, h3')
                 if selection:
                     pronostics.append({
                         "course": course_titre.get_text(strip=True) if course_titre else "—",
-                        "expert": nom.get_text(strip=True) if nom else "Équipe Equidia",
+                        "expert": "Équipe Equidia",
                         "selection": selection.get_text(strip=True)
                     })
             except Exception:
                 continue
         return jsonify({"pronostics": pronostics})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ---------- 4. PRONOSTICS GENY ----------
-@app.route('/api/pronostics/geny')
-def get_pronos_geny():
-    try:
-        url = "https://www.geny.com/partants-pmu"
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, 'html.parser')
-        pronostics = []
-        for table in soup.select('table'):
-            for row in table.select('tr'):
-                cells = row.select('td')
-                if len(cells) >= 3:
-                    texte = row.get_text(" ", strip=True)
-                    if re.search(r'\d+\s*-\s*\d+', texte):
-                        pronostics.append({"texte": texte})
-        return jsonify({"pronostics": pronostics})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ---------- 5. PRONOSTICS TURF.BZH ----------
-@app.route('/api/pronostics/turfbzh')
-def get_pronos_turfbzh():
-    try:
-        url = "https://www.turf.bzh/pronostics"
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, 'html.parser')
-        pronostics = []
-        for bloc in soup.select('.race, .course, article'):
-            titre = bloc.select_one('h2, h3, .title')
-            top4 = bloc.select_one('.top4, .selection, .picks')
-            if top4:
-                pronostics.append({
-                    "course": titre.get_text(strip=True) if titre else "—",
-                    "top4": top4.get_text(strip=True)
-                })
-        return jsonify({"pronostics": pronostics})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ---------- 6. PRONOSTICS PARIS-TURF ----------
-@app.route('/api/pronostics/paristurf')
-def get_pronos_paristurf():
-    try:
-        url = "https://www.paris-turf.com/pronostics"
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, 'html.parser')
-        pronostics = []
-        for article in soup.select('article, .pronostic-card'):
-            titre = article.select_one('h2, h3')
-            selection = article.select_one('.selection, .nums, strong')
-            if selection:
-                pronostics.append({
-                    "course": titre.get_text(strip=True) if titre else "—",
-                    "selection": selection.get_text(strip=True)
-                })
-        return jsonify({"pronostics": pronostics})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "pronostics": []}), 200
 
 # ---------- LANCEMENT ----------
 if __name__ == '__main__':
