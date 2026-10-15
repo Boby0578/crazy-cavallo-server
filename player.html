@@ -6,35 +6,34 @@
 <title>Crazy Cavallo — Direct</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: #0a0e17;
-    color: #eaeaea;
-    font-family: system-ui, -apple-system, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-  header {
-    background: #161b22;
-    padding: 12px 16px;
-    border-bottom: 1px solid #30363d;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
+  body { background: #0a0e17; color: #eaeaea; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: #161b22; padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
   header h1 { font-size: 1rem; color: #ffd700; font-weight: 800; }
   .status { font-size: 0.8rem; color: #94a3b8; display: flex; align-items: center; gap: 8px; }
   .status .dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; animation: blink 1.4s infinite; }
   .status.live .dot { background: #22c55e; animation: none; }
+  .status.loading .dot { background: #f59e0b; animation: blink 0.6s infinite; }
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-  .player-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; gap: 14px; }
-  video { width: 100%; max-width: 900px; background: #000; border-radius: 12px; aspect-ratio: 16 / 9; border: 2px solid #dc2626; box-shadow: 0 0 25px rgba(220, 38, 38, 0.35); }
+
+  .tabs { display: flex; gap: 6px; padding: 10px 14px 0; }
+  .tab { background: #1e293b; color: #94a3b8; padding: 8px 14px; border-radius: 8px 8px 0 0; font-size: 0.8rem; font-weight: 800; cursor: pointer; border: 1px solid #30363d; border-bottom: none; }
+  .tab.active { background: #0d1424; color: #ffd700; border-color: #38bdf8; }
+
+  .player-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 0 14px 14px; gap: 12px; }
+  .frame-box { width: 100%; max-width: 950px; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; border: 2px solid #dc2626; box-shadow: 0 0 25px rgba(220, 38, 38, 0.35); position: relative; }
+  .frame-box video, .frame-box iframe { width: 100%; height: 100%; display: block; border: none; }
+  .frame-box .hidden { display: none !important; }
+
   .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   button { background: linear-gradient(135deg, #0284c7, #2563eb); color: #fff; border: none; padding: 10px 18px; border-radius: 24px; font-weight: 800; font-size: 0.82rem; cursor: pointer; }
   button:hover { transform: scale(1.04); }
   button.secondary { background: linear-gradient(135deg, #dc2626, #991b1b); }
+  button.gold { background: linear-gradient(135deg, #f59e0b, #b45309); }
+  button:disabled { opacity: 0.5; cursor: wait; }
+
+  .info-box { font-size: 0.8rem; color: #94a3b8; text-align: center; padding: 10px; background: rgba(56, 189, 248, 0.1); border: 1px solid #0284c7; border-radius: 8px; max-width: 600px; display: none; }
+  .info-box.show { display: block; }
+  .info-box.success { background: rgba(34, 197, 94, 0.1); border-color: #22c55e; color: #4ade80; }
   .error { color: #f87171; font-size: 0.85rem; text-align: center; max-width: 600px; padding: 12px; background: rgba(220, 38, 38, 0.1); border: 1px solid #dc2626; border-radius: 8px; display: none; }
   .error.show { display: block; }
 </style>
@@ -45,87 +44,295 @@
   <h1>Crazy Cavallo — Direct</h1>
   <div class="status" id="status">
     <span class="dot"></span>
-    <span id="status-text">Demarrage...</span>
+    <span id="status-text">Initialisation...</span>
   </div>
 </header>
 
-<div class="player-wrap">
-  <video id="video" controls autoplay muted playsinline></video>
+<div class="tabs">
+  <div class="tab active" id="tab-iframe" onclick="afficherOnglet('iframe')">📺 Direct Equidia (iframe)</div>
+  <div class="tab" id="tab-hls" onclick="afficherOnglet('hls')">⚡ Player optimisé</div>
+</div>
 
-  <div class="actions">
-    <button onclick="reloadStream()">Actualiser le flux</button>
-    <button class="secondary" onclick="resolveStream()">Chercher un autre site</button>
+<div class="player-wrap">
+  <div class="frame-box">
+    <!-- IFrame Equidia visible par défaut -->
+    <iframe id="iframe-eq"
+            src="https://www.equidia.fr/direct"
+            allow="autoplay; fullscreen; encrypted-media"
+            allowfullscreen
+            referrerpolicy="no-referrer">
+    </iframe>
+
+    <!-- Player HLS caché au départ -->
+    <video id="video-hls" class="hidden" controls autoplay muted playsinline></video>
   </div>
 
+  <div class="actions">
+    <button class="gold" id="btn-extract" onclick="extraireFluxEquidia()">
+      🔍 Extraire le flux optimisé
+    </button>
+    <button class="secondary" id="btn-fallback" onclick="chercherAutreSite()">
+      🌐 Autre site
+    </button>
+    <button id="btn-reload" onclick="rechargerIframe()">
+      🔄 Recharger
+    </button>
+  </div>
+
+  <div class="info-box" id="info"></div>
   <div class="error" id="error"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 <script>
+// ============================================================
+//  CONFIGURATION
+// ============================================================
+
 const API_BASE = window.location.origin;
-const video = document.getElementById("video");
-const statusEl = document.getElementById("status");
-const statusText = document.getElementById("status-text");
-const errorEl = document.getElementById("error");
+
+const EQUIDIA_URLS = [
+  "https://www.equidia.fr/direct",
+  "https://www.equidia.fr/",
+];
+
+// Proxys CORS publics à essayer côté client
+const CORS_PROXIES = [
+  { nom: "allorigins", url: (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u) },
+  { nom: "corsproxy", url: (u) => "https://corsproxy.io/?" + encodeURIComponent(u) },
+  { nom: "codetabs", url: (u) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u) },
+  { nom: "thingproxy", url: (u) => "https://thingproxy.freeboard.io/fetch/" + u },
+];
+
+// ============================================================
+//  ÉTAT
+// ============================================================
 
 let hls = null;
+let ongletActif = "iframe";
 
-function setStatus(text, isLive = false) {
-  statusText.textContent = text;
-  statusEl.classList.toggle("live", isLive);
+// ============================================================
+//  HELPERS
+// ============================================================
+
+function setStatus(text, mode = "") {
+  document.getElementById("status-text").textContent = text;
+  const s = document.getElementById("status");
+  s.classList.remove("live", "loading");
+  if (mode) s.classList.add(mode);
 }
-function showError(msg) { errorEl.textContent = msg; errorEl.classList.add("show"); }
-function hideError() { errorEl.classList.remove("show"); }
+function showInfo(msg, success = false) {
+  const el = document.getElementById("info");
+  el.textContent = msg;
+  el.classList.add("show");
+  if (success) el.classList.add("success");
+  else el.classList.remove("success");
+}
+function hideInfo() { document.getElementById("info").classList.remove("show"); }
+function showError(msg) { const e = document.getElementById("error"); e.textContent = msg; e.classList.add("show"); }
+function hideError() { document.getElementById("error").classList.remove("show"); }
 
-function initPlayer() {
-  const src = API_BASE + "/stream.m3u8";
+// ============================================================
+//  ONGLETS
+// ============================================================
+
+function afficherOnglet(onglet) {
+  ongletActif = onglet;
+  const tabIframe = document.getElementById("tab-iframe");
+  const tabHls = document.getElementById("tab-hls");
+  const iframe = document.getElementById("iframe-eq");
+  const video = document.getElementById("video-hls");
+
+  if (onglet === "iframe") {
+    tabIframe.classList.add("active");
+    tabHls.classList.remove("active");
+    iframe.classList.remove("hidden");
+    video.classList.add("hidden");
+  } else {
+    tabIframe.classList.remove("active");
+    tabHls.classList.add("active");
+    iframe.classList.add("hidden");
+    video.classList.remove("hidden");
+  }
+}
+
+// ============================================================
+//  RECHARGER L'IFRAME
+// ============================================================
+
+function rechargerIframe() {
+  const iframe = document.getElementById("iframe-eq");
+  iframe.src = iframe.src;
+}
+
+// ============================================================
+//  EXTRACTION DU FLUX EQUIDIA VIA CORS PROXY
+// ============================================================
+
+async function fetchViaCors(url) {
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const proxyUrl = proxy.url(url);
+      console.log(`[CORS] Test ${proxy.nom}...`);
+      const r = await fetch(proxyUrl, { method: "GET" });
+      if (r.ok) {
+        const text = await r.text();
+        if (text && text.length > 100) {
+          console.log(`[CORS] ✅ ${proxy.nom} a répondu (${text.length} octets)`);
+          return text;
+        }
+      }
+    } catch (e) {
+      console.log(`[CORS] ${proxy.nom} erreur :`, e.message);
+    }
+  }
+  return null;
+}
+
+function extraireM3U8(html) {
+  if (!html) return [];
+  const urls = [];
+
+  // URLs absolues
+  const reAbs = /https?:\/\/[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?/gi;
+  let match;
+  while ((match = reAbs.exec(html)) !== null) urls.push(match[0]);
+
+  // Dans les attributs src / data-src
+  const patterns = [
+    /src\s*=\s*["']([^"']+\.m3u8[^"']*)["']/gi,
+    /data-src\s*=\s*["']([^"']+\.m3u8[^"']*)["']/gi,
+    /"src"\s*:\s*"([^"]+\.m3u8[^"]*)"/gi,
+    /"url"\s*:\s*"([^"]+\.m3u8[^"]*)"/gi,
+    /"hls"\s*:\s*"([^"]+)"/gi,
+    /"stream"\s*:\s*"([^"]+)"/gi,
+    /"file"\s*:\s*"([^"]+)"/gi,
+  ];
+  for (const pat of patterns) {
+    let m;
+    while ((m = pat.exec(html)) !== null) {
+      if (m[1].includes(".m3u8") && !urls.includes(m[1])) {
+        urls.push(m[1].startsWith("http") ? m[1] : "https://www.equidia.fr" + m[1]);
+      }
+    }
+  }
+
+  return urls;
+}
+
+async function extraireFluxEquidia() {
+  const btn = document.getElementById("btn-extract");
+  btn.disabled = true;
+  setStatus("Extraction du flux...", "loading");
+  hideError();
+  showInfo("Analyse de la page Equidia via proxy CORS...");
+
+  let tousLesFlux = [];
+
+  for (const url of EQUIDIA_URLS) {
+    console.log(`[Extract] Analyse de ${url}...`);
+    const html = await fetchViaCors(url);
+    if (html) {
+      const flux = extraireM3U8(html);
+      console.log(`[Extract] ${flux.length} flux trouvé(s) dans ${url}`);
+      tousLesFlux = tousLesFlux.concat(flux);
+    }
+    if (tousLesFlux.length > 0) break;
+  }
+
+  // Déduplique
+  tousLesFlux = [...new Set(tousLesFlux)];
+
+  if (tousLesFlux.length === 0) {
+    setStatus("Aucun flux extrait", "");
+    showInfo("❌ Aucun flux .m3u8 trouvé côté client. L'iframe Equidia reste disponible (onglet 1).");
+    btn.disabled = false;
+    return;
+  }
+
+  console.log(`[Extract] ${tousLesFlux.length} flux uniques trouvés :`, tousLesFlux);
+  showInfo(`✅ ${tousLesFlux.length} flux trouvé(s) ! Test du premier...`, true);
+
+  // Essaye de charger le premier flux dans HLS.js
+  const fluxChoisi = tousLesFlux[0];
+  const video = document.getElementById("video-hls");
+
   if (hls) { hls.destroy(); hls = null; }
 
   if (Hls.isSupported()) {
     hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
-    hls.loadSource(src);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => { setStatus("En direct", true); hideError(); video.play().catch(() => {}); });
+
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
-      if (data.type === "networkError") { setStatus("Reconnexion...", false); setTimeout(() => hls.startLoad(), 2000); }
-      else if (data.type === "mediaError") hls.recoverMediaError();
-      else { setStatus("Erreur", false); showError("Impossible de lire le flux."); }
+      console.error("[HLS] Erreur :", data);
+      setStatus("Flux invalide", "");
+      showInfo("⚠️ Ce flux ne se charge pas. Utilise l'onglet Equidia (iframe).");
     });
-  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = src;
-    video.addEventListener("loadedmetadata", () => { setStatus("En direct", true); video.play().catch(() => {}); });
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      console.log("[HLS] ✅ Flux chargé !");
+      setStatus("En direct (flux extrait)", "live");
+      showInfo("✅ Flux extrait chargé ! Onglet « Player optimisé ».", true);
+      afficherOnglet("hls");
+      video.play().catch(() => {});
+    });
+
+    hls.loadSource(fluxChoisi);
+    hls.attachMedia(video);
   } else {
-    showError("Navigateur non compatible HLS.");
+    showInfo("❌ Navigateur non compatible HLS côté client.");
   }
+
+  btn.disabled = false;
 }
 
-async function reloadStream() {
-  setStatus("Rechargement...", false); hideError();
-  if (hls) hls.startLoad(); else initPlayer();
-}
+// ============================================================
+//  RECHERCHE FALLBACK (via le serveur)
+// ============================================================
 
-async function resolveStream() {
-  setStatus("Recherche d'un flux... (1-2 min)", false); hideError();
+async function chercherAutreSite() {
+  const btn = document.getElementById("btn-fallback");
+  btn.disabled = true;
+  setStatus("Recherche autre site...", "loading");
+  hideError();
+  showInfo("Recherche d'un flux alternatif (1-2 min)...");
+
   try {
     const r = await fetch(API_BASE + "/resolve");
     const data = await r.json();
-    if (data.ok) { setStatus("Flux trouve : " + data.site, true); initPlayer(); }
-    else { setStatus("Aucun flux", false); showError("Erreur : " + data.error); }
-  } catch (e) { setStatus("Erreur reseau", false); showError(e.message); }
+    if (data.ok) {
+      setStatus("Flux trouvé : " + data.site, "live");
+      showInfo("✅ Flux trouvé sur " + data.site, true);
+      // Charger dans le player HLS
+      const fluxUrl = API_BASE + "/stream.m3u8";
+      const video = document.getElementById("video-hls");
+      if (hls) { hls.destroy(); hls = null; }
+      if (Hls.isSupported()) {
+        hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 20 });
+        hls.loadSource(fluxUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          afficherOnglet("hls");
+          video.play().catch(() => {});
+        });
+      }
+    } else {
+      setStatus("Aucun flux alternatif", "");
+      showInfo("⚠️ Aucun flux alternatif. L'iframe Equidia reste disponible.");
+    }
+  } catch (e) {
+    setStatus("Erreur réseau", "");
+    showError("Impossible de contacter le serveur : " + e.message);
+  }
+  btn.disabled = false;
 }
 
-async function checkStatus() {
-  try {
-    const r = await fetch(API_BASE + "/status");
-    const data = await r.json();
-    if (data.ready) setStatus("Flux : " + data.site, true);
-    else setStatus("Aucun flux pret (clique sur Chercher)", false);
-  } catch (e) { setStatus("Serveur hors ligne", false); }
-}
+// ============================================================
+//  INIT
+// ============================================================
 
-checkStatus();
-initPlayer();
+setStatus("Direct Equidia chargé", "live");
+showInfo("💡 L'iframe Equidia charge le direct. Pour un lecteur optimisé, clique sur « Extraire le flux ».");
 </script>
 </body>
 </html>
