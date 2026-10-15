@@ -1,0 +1,165 @@
+import os
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+import re
+
+app = Flask(__name__)
+CORS(app)
+
+# ---------- CONFIGURATION ----------
+PMU_API_BASE = "https://offline.turfinfo.api.pmu.fr/rest/client/7/programme/"
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/html, */*',
+    'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8'
+}
+
+def today_pmu():
+    """Retourne la date du jour au format YYYYMMDD pour l'API PMU."""
+    return datetime.now().strftime("%Y%m%d")
+
+# ---------- PAGE D'ACCUEIL ----------
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "ok",
+        "message": "Serveur proxy Crazy Cavallo en ligne",
+        "endpoints": [
+            "/api/programme",
+            "/api/participants?reunion=1&course=1",
+            "/api/pronostics/equidia",
+            "/api/pronostics/geny",
+            "/api/pronostics/turfbzh",
+            "/api/pronostics/paristurf"
+        ]
+    })
+
+# ---------- 1. PROGRAMME DU JOUR ----------
+@app.route('/api/programme')
+def get_programme():
+    """Récupère le programme complet du jour depuis l'API PMU."""
+    url = f"{PMU_API_BASE}{today_pmu()}"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- 2. PARTICIPANTS + COTES ----------
+@app.route('/api/participants')
+def get_participants():
+    """Récupère les participants et cotes d'une course spécifique."""
+    reunion = request.args.get('reunion', '1')
+    course = request.args.get('course', '1')
+    url = f"{PMU_API_BASE}{today_pmu()}/R{reunion}/C{course}/participants"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- 3. PRONOSTICS EQUIDIA ----------
+@app.route('/api/pronostics/equidia')
+def get_pronos_equidia():
+    """Scrape les pronostics depuis Equidia."""
+    try:
+        url = "https://www.equidia.fr/courses/pronostics"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        pronostics = []
+        for bloc in soup.select('.pronostic-item, .expert-pick, article'):
+            try:
+                nom = bloc.select_one('.expert-name, .author, strong')
+                selection = bloc.select_one('.selection, .picks, .nums')
+                course_titre = bloc.select_one('.race-title, h3')
+                if selection:
+                    pronostics.append({
+                        "course": course_titre.get_text(strip=True) if course_titre else "—",
+                        "expert": nom.get_text(strip=True) if nom else "Équipe Equidia",
+                        "selection": selection.get_text(strip=True)
+                    })
+            except Exception:
+                continue
+        return jsonify({"pronostics": pronostics})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- 4. PRONOSTICS GENY ----------
+@app.route('/api/pronostics/geny')
+def get_pronos_geny():
+    """Scrape les pronostics depuis Geny.com."""
+    try:
+        url = "https://www.geny.com/partants-pmu"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        pronostics = []
+        for table in soup.select('table'):
+            for row in table.select('tr'):
+                cells = row.select('td')
+                if len(cells) >= 3:
+                    texte = row.get_text(" ", strip=True)
+                    if re.search(r'\d+\s*-\s*\d+', texte):
+                        pronostics.append({"texte": texte})
+        return jsonify({"pronostics": pronostics})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- 5. PRONOSTICS TURF.BZH ----------
+@app.route('/api/pronostics/turfbzh')
+def get_pronos_turfbzh():
+    """Scrape les pronostics depuis Turf.bzh."""
+    try:
+        url = "https://www.turf.bzh/pronostics"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        pronostics = []
+        for bloc in soup.select('.race, .course, article'):
+            titre = bloc.select_one('h2, h3, .title')
+            top4 = bloc.select_one('.top4, .selection, .picks')
+            if top4:
+                pronostics.append({
+                    "course": titre.get_text(strip=True) if titre else "—",
+                    "top4": top4.get_text(strip=True)
+                })
+        return jsonify({"pronostics": pronostics})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- 6. PRONOSTICS PARIS-TURF ----------
+@app.route('/api/pronostics/paristurf')
+def get_pronos_paristurf():
+    """Scrape les pronostics depuis Paris-Turf."""
+    try:
+        url = "https://www.paris-turf.com/pronostics"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        pronostics = []
+        for article in soup.select('article, .pronostic-card'):
+            titre = article.select_one('h2, h3')
+            selection = article.select_one('.selection, .nums, strong')
+            if selection:
+                pronostics.append({
+                    "course": titre.get_text(strip=True) if titre else "—",
+                    "selection": selection.get_text(strip=True)
+                })
+        return jsonify({"pronostics": pronostics})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- LANCEMENT ----------
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host='0.0.0.0', port=port, threaded=True)
